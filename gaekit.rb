@@ -1,6 +1,8 @@
 require 'java'
 
 module GAEKit
+  VERSION = '0.1.1'
+
   module Datastore
     KIND = self.name
 
@@ -15,10 +17,12 @@ module GAEKit
         @service ||= DatastoreServiceFactory.datastore_service
       end
       module_function :service
+    end
 
+    module Utils
       def to_java(object)
         if object.is_a?(String) && object.length >= 500
-          Text.new(object)
+          API::Text.new(object)
         else
           object
         end
@@ -28,7 +32,7 @@ module GAEKit
       def to_ruby(object)
         if object.is_a?(Java::JavaUtil::ArrayList)
           object.to_a
-        elsif object.is_a?(Text)
+        elsif object.is_a?(API::Text)
           object.value
         else
           object
@@ -39,54 +43,55 @@ module GAEKit
 
     module Methods
       def get(key)
-        API.to_ruby((@entity ||= entity).get_property(key.to_s))
+        Utils.to_ruby(entity.get_property(key.to_s))
       end
       alias :[] :get
 
       def put(key, value)
-        (@entity ||= entity).set_property(key.to_s, API.to_java(value))
-        API.service.put(@entity)
+        entity { |ent| ent.set_property(key.to_s, Utils.to_java(value)) }
         value
       end
       alias :[]= :put
 
       def has_key?(key)
-        (@entity ||= entity).has_property(key.to_s)
+        entity.has_property(key.to_s)
       end
       alias :include? :has_key?
 
       def delete(key)
-        (@entity ||= entity).remove_property(key.to_s)
-        API.service.put(@entity)
+        entity { |ent| ent.remove_property(key.to_s) }
         nil
       end
 
       def keys
-        (@entity ||= entity).properties.map { |key, value| key }
+        entity.properties.map { |key, value| key }
       end
 
       def values
-        (@entity ||= entity).properties.map { |key, value| API.to_ruby(value) }
+        entity.properties.map { |key, value| Utils.to_ruby(value) }
       end
 
     private
       def entity
-        API.service.get(API::KeyFactory.create_key(KIND, self.name))
+        ent = API.service.get(API::KeyFactory.create_key(KIND, self.name))
       rescue NativeException
-        new_entity = API::Entity.new(KIND, self.name)
-        API.service.put(new_entity)
-        new_entity
+        ent = API::Entity.new(KIND, self.name)
+      ensure
+        if block_given?
+          yield ent
+          API.service.put(ent)
+        end
       end
     end
 
     def dump
       entities = {}
-      API.service.prepare(API::Query.new(KIND)).as_iterator.each do |entity|
+      API.service.prepare(API::Query.new(KIND)).as_iterator.each do |ent|
         properties = {}
-        entity.properties.each do |key, value|
-          properties[key] = API.to_ruby(value)
+        ent.properties.each do |key, value|
+          properties[key] = Utils.to_ruby(value)
         end
-        entities[entity.key.name] = properties
+        entities[ent.key.name] = properties
       end
       entities
     end
