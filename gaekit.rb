@@ -1,7 +1,7 @@
 require 'java'
 
 module GAEKit
-  VERSION = '0.1.1'
+  VERSION = '0.2.0'
 
   module Datastore
     KIND = self.name
@@ -100,5 +100,68 @@ module GAEKit
 
   class Store
     extend Datastore::Methods
+  end
+
+  module Logging
+    import java.util.logging.Logger
+    import java.util.logging.Level
+
+    LEVELS = {
+      :fatal => Level::SEVERE,
+      :error => Level::SEVERE,
+      :warn => Level::WARNING,
+      :info => Level::INFO,
+      :debug => Level::FINE,
+    }
+
+    def log(level, message, exception = nil)
+      raise "Invalid log level: #{level}" unless LEVELS.has_key?(level)
+      if exception
+        traces = exception.backtrace.dup
+        brief = traces.shift
+        message += "\n" + brief +
+                   ": #{exception.message} (#{exception.class})\n\tfrom " +
+                   traces.join("\n\tfrom ")
+      end
+      @logger.log(LEVELS[level], message)
+    end
+
+    def fatal(*args)
+      log(:fatal, *args)
+    end
+
+    def error(*args)
+      log(:error, *args)
+    end
+
+    def warn(*args)
+      log(:warn, *args)
+    end
+
+    def info(*args)
+      log(:info, *args)
+    end
+
+    def debug(*args)
+      log(:debug, *args)
+    end
+
+    def initialize(name = nil)
+      if name
+        @logger = Logger.getLogger(name)
+      else
+        @logger = Logger.anonymous_logger
+      end
+    end
+
+    def self.included(target)
+      target.extend self
+      target.instance_variable_set(:@logger,
+              Logger.getLogger(Logger::GLOBAL_LOGGER_NAME))
+    end
+  end
+
+  class Logger
+    include Logging
   end
 end
