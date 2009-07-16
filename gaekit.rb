@@ -118,8 +118,7 @@ module GAEKit
       raise "Invalid log level: #{level}" unless LEVELS.has_key?(level)
       if exception
         traces = exception.backtrace.dup
-        brief = traces.shift
-        message += "\n" + brief +
+        message += "\n" + traces.shift.lstrip +
                    ": #{exception.message} (#{exception.class})\n\tfrom " +
                    traces.join("\n\tfrom ")
       end
