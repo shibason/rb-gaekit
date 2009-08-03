@@ -1,7 +1,7 @@
 require 'java'
 
 module GAEKit
-  VERSION = '0.2.0'
+  VERSION = '0.3.0'
 
   module Datastore
     KIND = self.name
@@ -162,5 +162,104 @@ module GAEKit
 
   class Logger
     include Logging
+  end
+
+  module URLFetch
+    import java.net.URL
+    import com.google.appengine.api.urlfetch.URLFetchServiceFactory
+    import com.google.appengine.api.urlfetch.HTTPMethod
+    import com.google.appengine.api.urlfetch.HTTPRequest
+    import com.google.appengine.api.urlfetch.HTTPHeader
+    import com.google.appengine.api.urlfetch.FetchOptions
+
+    def service
+      @service ||= URLFetchServiceFactory.getURLFetchService
+    end
+    module_function :service
+  end
+
+  class HTTPResponse
+    attr_reader :code, :body
+
+    def initialize(response)
+      @code = response.response_code
+      content = response.content
+      @body = String.from_java_bytes(content) if content
+      @headers = {}
+      response.headers.each do |header|
+        @headers[header.name] = header.value
+      end
+    end
+
+    def [](name)
+      @headers[name]
+    end
+
+    def key?(name)
+      @headers.key?(name)
+    end
+
+    def each
+      @headers.each do |name, value|
+        yield(name, value)
+      end
+    end
+  end
+
+  class HTTP
+    class << self
+      alias :start :new
+    end
+
+    attr_accessor :authenticator
+
+    def initialize(authenticator = nil,
+                   allow_truncate = true,
+                   follow_redirects = true)
+      @authenticator = authenticator
+      if allow_truncate
+        @option = URLFetch::FetchOptions::Builder.allow_truncate
+      else
+        @option = URLFetch::FetchOptions::Builder.disallow_truncate
+      end
+      if follow_redirects
+        @option.follow_redirects
+      else
+        @option.do_not_follow_recirects
+      end
+      yield(self) if block_given?
+    end
+
+    def delete(url, header = {})
+      request(url, :DELETE, nil, header)
+    end
+
+    def get(url, header = {})
+      request(url, :GET, nil, header)
+    end
+
+    def head(url, header = {})
+      request(url, :HEAD, nil, header)
+    end
+
+    def post(url, data, header = {})
+      request(url, :POST, data, header)
+    end
+
+    def put(url, data, header = {})
+      request(url, :PUT, data, header)
+    end
+
+    private
+    def request(url, method, data = nil, header = {})
+      url = URLFetch::URL.new(url)
+      method = URLFetch::HTTPMethod.value_of(method.to_s)
+      request = URLFetch::HTTPRequest.new(url, method, @option)
+      request.payload = data.to_java_bytes if data
+      header.each do |name, value|
+        request.add_header(URLFetch::HTTPHeader.new(name.to_s, value.to_s))
+      end
+      HTTPResponse.new(URLFetch.service.fetch(request))
+    end
   end
 end
