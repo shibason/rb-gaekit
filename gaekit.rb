@@ -1,7 +1,7 @@
 require 'java'
 
 module GAEKit
-  VERSION = '0.3.0'
+  VERSION = '0.3.1'
 
   module Datastore
     KIND = self.name
@@ -256,10 +256,24 @@ module GAEKit
       method = URLFetch::HTTPMethod.value_of(method.to_s)
       request = URLFetch::HTTPRequest.new(url, method, @option)
       request.payload = data.to_java_bytes if data
+      header = header.merge(@authenticator.header) if @authenticator
       header.each do |name, value|
         request.add_header(URLFetch::HTTPHeader.new(name.to_s, value.to_s))
       end
       HTTPResponse.new(URLFetch.service.fetch(request))
+    end
+  end
+
+  module HTTPAuth
+    class AbstractAuth
+      attr_reader :header
+    end
+
+    class BasicAuth < AbstractAuth
+      def initialize(username, password)
+        auth_token = [ "#{username}:#{password}" ].pack('m').chomp
+        @header = { 'Authorization' => "Basic #{auth_token}" }
+      end
     end
   end
 end
