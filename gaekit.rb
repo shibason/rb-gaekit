@@ -1,7 +1,9 @@
 require 'java'
+require 'uri'
+require 'openssl'
 
 module GAEKit
-  VERSION = '0.3.1'
+  VERSION = '0.3.2'
 
   module Datastore
     KIND = self.name
@@ -178,6 +180,69 @@ module GAEKit
     module_function :service
   end
 
+  module HTTPHelper
+    RESERVED_CHARACTERS = /[^a-zA-Z0-9\-\.\_\~]/
+
+    def escape(value)
+      URI.escape(value.to_s, RESERVED_CHARACTERS)
+    end
+
+    def query_string(parameters, delimiter = '&', quote = nil)
+      parameters.map do |name, value|
+        "#{escape(name)}=#{quote}#{escape(value)}#{quote}"
+      end.join(delimiter)
+    end
+  end
+
+  class HTTPRequest
+    include HTTPHelper
+
+    attr_reader :url, :method, :data, :header
+
+    def initialize(url, method, data = nil, header = {})
+      @original_url = url
+      url = URI.parse(url)
+      query = url.query
+      url.query = nil
+      url.fragment = nil
+      @url = url.to_s
+
+      @method = method.to_s.upcase
+
+      @payload = data
+      @data = {}
+      @data.update(parse(query)) if query
+      @data.update(parse(data)) if data
+
+      @header = header
+    end
+
+    def parse(data)
+      return data unless data.is_a?(String)
+      parameters = {}
+      data.split('&').each do |pair|
+        name, value = pair.split('=')
+        parameters[URI.unescape(name)] = URI.unescape(value)
+      end
+      parameters
+    end
+
+    def payload
+      @payload.is_a?(Hash) ? query_string(@payload) : @payload
+    end
+
+    def to_java_request(option)
+      url = URLFetch::URL.new(@original_url)
+      method = URLFetch::HTTPMethod.value_of(@method)
+      request = URLFetch::HTTPRequest.new(url, method, option)
+      request.payload = payload.to_java_bytes if @payload
+      @header.each do |name, value|
+        request.add_header(URLFetch::HTTPHeader.new(name.to_s, value.to_s))
+      end
+      request
+    end
+  end
+
   class HTTPResponse
     attr_reader :code, :body
 
@@ -252,27 +317,97 @@ module GAEKit
 
     private
     def request(url, method, data = nil, header = {})
-      url = URLFetch::URL.new(url)
-      method = URLFetch::HTTPMethod.value_of(method.to_s)
-      request = URLFetch::HTTPRequest.new(url, method, @option)
-      request.payload = data.to_java_bytes if data
-      header = header.merge(@authenticator.header) if @authenticator
-      header.each do |name, value|
-        request.add_header(URLFetch::HTTPHeader.new(name.to_s, value.to_s))
-      end
-      HTTPResponse.new(URLFetch.service.fetch(request))
+      request = HTTPRequest.new(url, method, data, header)
+      request.header.update(@authenticator.header(request)) if @authenticator
+      HTTPResponse.new(URLFetch.service.fetch(request.to_java_request(@option)))
     end
   end
 
   module HTTPAuth
     class AbstractAuth
-      attr_reader :header
+      def header(request)
+        @header
+      end
     end
 
     class BasicAuth < AbstractAuth
       def initialize(username, password)
         auth_token = [ "#{username}:#{password}" ].pack('m').chomp
         @header = { 'Authorization' => "Basic #{auth_token}" }
+      end
+    end
+
+    class OAuth < AbstractAuth
+      include HTTPHelper
+
+      OAUTH_VERSION = '1.0'
+
+      def initialize(consumer_key, consumer_secret, token, token_secret)
+        @consumer_key = consumer_key
+        @consumer_secret = consumer_secret
+        @token = token
+        @token_secret = token_secret
+
+        # This class supports only 'HMAC-SHA1' at present.
+        @signature_method = 'HMAC-SHA1'
+      end
+
+      def header(request)
+        parameters = oauth_parameters
+        parameters[:oauth_signature] = signature(request, parameters)
+        parameters = query_string(parameters, ', ', '"')
+        { 'Authorization' => 'OAuth ' + parameters }
+      end
+
+      def oauth_parameters
+        {
+          :oauth_consumer_key => @consumer_key,
+          :oauth_token => @token,
+          :oauth_signature_method => @signature_method,
+          :oauth_timestamp => timestamp,
+          :oauth_nonce => nonce,
+          :oauth_version => OAUTH_VERSION,
+        }
+      end
+
+      def signature(request, parameters)
+        case @signature_method
+        when 'PLAINTEXT'
+          escape(secret)
+        when 'HMAC-SHA1'
+          base64(digest_sha1_md5(signature_base_string(request, parameters)))
+        else
+          raise "Unknown signature method: #{@signature_method}"
+        end
+      end
+
+      def signature_base_string(request, parameters)
+        method = request.method
+        url = request.url
+        parameters = parameters.merge(request.data)
+        parameters = parameters.sort_by { |name, value| name.to_s }
+        queries = query_string(parameters)
+        "#{escape(method)}&#{escape(url)}&#{escape(queries)}"
+      end
+
+      def secret
+        escape(@consumer_secret) + '&' + escape(@token_secret)
+      end
+
+      def digest_sha1_md5(value)
+        OpenSSL::HMAC.digest(OpenSSL::Digest::SHA1.new, secret, value)
+      end
+
+      def base64(value)
+        [ value ].pack('m').chomp.gsub(/\n/, '')
+      end
+
+      def timestamp
+        Time.now.to_i.to_s
+      end
+
+      def nonce
+        OpenSSL::Digest::Digest.hexdigest('MD5', "#{Time.now.to_f}#{rand}")
       end
     end
   end
