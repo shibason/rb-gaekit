@@ -375,7 +375,7 @@ module GAEKit
         when 'PLAINTEXT'
           escape(secret)
         when 'HMAC-SHA1'
-          base64(digest_sha1_md5(signature_base_string(request, parameters)))
+          base64(digest_hmac_sha1(signature_base_string(request, parameters)))
         else
           raise "Unknown signature method: #{@signature_method}"
         end
@@ -394,7 +394,7 @@ module GAEKit
         escape(@consumer_secret) + '&' + escape(@token_secret)
       end
 
-      def digest_sha1_md5(value)
+      def digest_hmac_sha1(value)
         OpenSSL::HMAC.digest(OpenSSL::Digest::SHA1.new, secret, value)
       end
 
