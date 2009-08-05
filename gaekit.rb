@@ -274,6 +274,12 @@ module GAEKit
   class HTTP
     class << self
       alias :start :new
+
+      [ :delete, :get, :head, :post, :put ].each do |method_name|
+        define_method(method_name) do |*args|
+          self.new.method(method_name).call(*args)
+        end
+      end
     end
 
     attr_accessor :authenticator
